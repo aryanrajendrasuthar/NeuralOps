@@ -1,20 +1,23 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-
-const Dashboard = () => (
-  <div className="flex items-center justify-center h-screen">
-    <div className="text-center">
-      <h1 className="text-3xl font-bold text-white mb-2">NeuralOps</h1>
-      <p className="text-gray-400">AI Agent Observability Platform</p>
-      <p className="text-gray-500 text-sm mt-4">Dashboard will be built in Sprint 5</p>
-    </div>
-  </div>
-)
+import { AuthProvider } from '@/context/AuthContext'
+import { Layout } from '@/components/Layout'
+import { LoginPage } from '@/pages/LoginPage'
+import { DashboardPage } from '@/pages/DashboardPage'
+import { AgentsPage } from '@/pages/AgentsPage'
+import { AlertsPage } from '@/pages/AlertsPage'
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Dashboard />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<Layout />}>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/alerts" element={<AlertsPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   )
 }

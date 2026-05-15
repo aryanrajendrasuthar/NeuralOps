@@ -6,6 +6,147 @@ encountered that sprint. The intended reader is a developer who understands basi
 yet worked in an industry engineering role. These are the things you would learn working alongside a senior
 engineer — explained directly rather than buried in documentation or assumed as prior knowledge.
 
+Sprint 5 — Authentication, Authorization, and the Frontend
+-----------------------------------------------------------
+
+What JWT Authentication Actually Is
+
+A JSON Web Token (JWT) is a signed, compact, URL-safe string that asserts claims about a subject. The
+standard format is three Base64URL-encoded segments separated by periods: header.payload.signature.
+
+The header names the signing algorithm (HS256, RS256). The payload contains claims — `sub` (the subject,
+typically a user ID), `iat` (issued at), `exp` (expiry), and any custom claims your application needs
+(in NeuralOps: `email`, `role`, `type`). The signature is a cryptographic MAC produced by the server
+using a secret key. No one can forge a token without that key, and anyone who has the key can verify any
+token without a database lookup.
+
+This is the critical insight: JWT is stateless. The user-service does not need to store sessions in a
+database. Any service can validate a JWT by checking the signature against the shared secret. This is
+why JWTs are well-suited to microservices — the gateway can validate a token once, and downstream
+services can trust the validated principal without their own database calls.
+
+The trade-off is that tokens cannot be revoked before they expire. This is why NeuralOps uses short-lived
+access tokens (15 minutes). If a token is stolen, it can be used for at most 15 minutes. The refresh
+token (30 days) lives in Redis, so logging out revokes it by storing the token ID in a blocklist.
+When the client exchanges the refresh token for a new access token, the server checks Redis first.
+
+Access tokens vs. refresh tokens: access tokens are sent with every request in the Authorization header.
+Refresh tokens are sent once, to the /auth/refresh endpoint, in exchange for a new access token. They
+are never sent to any other endpoint. This separation limits the window of exposure — even if an access
+token is intercepted, it expires in 15 minutes. The refresh token is longer-lived but is only ever
+sent to one endpoint over TLS.
+
+How bcrypt Password Hashing Works
+
+bcrypt is a password hashing algorithm designed in 1999 specifically for storing passwords. It has two
+properties that make it the right choice over general-purpose hash functions like SHA-256 or MD5.
+
+First, bcrypt is slow by design. The cost factor (10 in NeuralOps) controls the number of rounds of
+key expansion. At cost 10, hashing one password takes roughly 100ms on a modern CPU. This is
+irrelevant for login (users do not notice 100ms of hashing) but is decisive against attackers: an
+attacker who steals the database can only attempt 10 hashes per second per CPU core, making
+brute-force attacks computationally prohibitive. MD5 can hash billions of passwords per second.
+
+Second, bcrypt automatically generates and incorporates a per-password salt. A salt is random bytes
+mixed into the input before hashing. This means two users with the same password produce different
+hashes, defeating rainbow table attacks (precomputed hash-to-password mappings).
+
+In Spring Security, `BCryptPasswordEncoder` handles all of this. `encode(rawPassword)` returns the
+full bcrypt string including the algorithm version, cost factor, and salt — all encoded as a single
+string. `matches(rawPassword, encodedHash)` re-hashes the input using the salt embedded in the stored
+hash and compares in constant time, preventing timing attacks.
+
+What CORS Is and Why It Exists
+
+The Same-Origin Policy is a browser security mechanism that prevents JavaScript on one origin
+(domain + protocol + port) from reading responses from a different origin. When the NeuralOps
+frontend at `localhost:3000` makes an API request to `localhost:8080`, the browser blocks it by
+default because the ports differ — they are different origins.
+
+CORS (Cross-Origin Resource Sharing) is the mechanism by which servers tell browsers which origins
+they trust. The browser sends a preflight request (`OPTIONS`) to the server asking: "may this
+JavaScript make this request?" The server responds with `Access-Control-Allow-Origin` and
+`Access-Control-Allow-Methods` headers. If the response permits the origin, the browser proceeds.
+If not, the browser blocks the request and the JavaScript code receives an error.
+
+This happens in the browser only. The CORS restriction does not apply to server-to-server requests,
+curl, Postman, or any non-browser HTTP client. This is why developers are sometimes confused when
+a request works from their terminal but fails in the browser.
+
+In NeuralOps, CORS is configured on the gateway (port 8080), which is the single entry point for
+all browser traffic. Each downstream service has its own CORS configuration as well, which is
+correct defense-in-depth — if a service is ever exposed directly, it is still protected.
+
+How React Query Manages Server State
+
+React Query is a server state management library. It is important to understand what "server state"
+means as distinct from "client state." Client state is data that lives entirely in the browser —
+form inputs, modal open/closed, selected tab. Server state is data that lives on the server and is
+fetched by the client — metrics, alert rules, agent status.
+
+Without React Query, managing server state requires useEffect and useState with careful coordination
+of loading, error, and success states, manual cache invalidation, and re-fetching logic. It is
+verbose and error-prone. React Query replaces all of this with three primary concepts.
+
+A query is a declarative fetch of data identified by a query key. `useQuery({ queryKey: ['metrics',
+'latency', agentId], queryFn: () => metricsApi.getLatency(agentId) })` fetches latency data and
+returns `{ data, isLoading, isError }`. React Query caches the result under the key. If the same
+query key is used in two components, only one network request is made.
+
+`staleTime` controls how long cached data is considered fresh. With `staleTime: 30_000`, a query
+that was fetched 25 seconds ago will not be re-fetched when a component mounts — the cached value
+is used. With `refetchInterval: 15_000`, the query refreshes every 15 seconds in the background,
+keeping the dashboard live.
+
+A mutation is an operation that modifies server state — creating an alert rule, deleting one,
+toggling enabled. After a mutation succeeds, `queryClient.invalidateQueries({ queryKey: ['alerts',
+'rules'] })` marks the cached rules as stale, which triggers an immediate refetch. This is how
+the rules list updates immediately after you create or delete a rule.
+
+Why API Keys Are Better Than Passwords for Machine Access
+
+When a machine client (a CI pipeline, another microservice, a script) needs to authenticate with an
+API, you do not want it to use a username and password. Passwords have several problems in this
+context: they are long-lived secrets that are hard to rotate without downtime, they give access to
+the full account including the ability to change the password and lock out the real user, and they
+are not auditable — you cannot tell which password access came from which system.
+
+API keys solve these problems. Each key has a descriptive name ("production deployment pipeline",
+"analytics export script") so you know where it is used. Keys can be revoked individually — if one
+system is compromised, you revoke that key and issue a new one without affecting any other system.
+Keys can be scoped to specific capabilities (a read-only key for a monitoring script, a write key
+for the ingestion service).
+
+The raw key is shown exactly once — at creation — and never stored. NeuralOps stores a bcrypt hash
+of the key, just like a password. When a request arrives with the key, the server finds the matching
+key record by the key prefix (the first 12 characters, which are not secret) and then bcrypt-verifies
+the full key against the stored hash. This means a database breach does not expose any valid keys.
+
+The prefix (stored in plaintext in the `key_prefix` column) lets users identify which key is which
+in the management UI without the server needing to store or display the actual key value.
+
+How the Frontend State Machine Works
+
+Every user interface is implicitly a state machine. The NeuralOps frontend has three authentication
+states: unauthenticated (no tokens in localStorage), authenticated (valid tokens in localStorage),
+and refreshing (the access token expired, the refresh token is being exchanged for a new one).
+
+These states map directly to navigation. Unauthenticated users are redirected to `/login` by the
+`Layout` component, which reads `isAuthenticated` from `AuthContext`. Authenticated users see the
+dashboard. When the Axios interceptor detects a 401, it triggers the refresh flow atomically — the
+original request is queued while the refresh completes and retried with the new token.
+
+The `AuthProvider` wraps the entire application and makes `user`, `login`, and `logout` available
+via `useAuth()`. This is the React Context pattern: a single source of truth for a shared state
+that many components need to read. The alternative — prop drilling — would require passing user
+down through every component in the tree, which is unmaintainable.
+
+One important implementation detail: the user object is stored in localStorage on login and read
+back on page load. This means the authentication state survives browser refresh — the user does not
+have to log in again every time they open a new tab. The risk is that if the access token expires
+and the refresh token is also invalid (user logged out on another device, or the 30-day window
+passed), the page will silently redirect to `/login` on the first API call, which is correct behavior.
+
 Sprint 3 — Metrics Engine and Real-Time Analytics
 ---------------------------------------------------
 
