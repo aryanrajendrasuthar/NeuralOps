@@ -1,0 +1,26 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+neuralops:
+  kafka:
+    topics:
+      traces-raw: neuralops.traces.raw
+      traces-errors: neuralops.traces.errors
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+logging:
+  level:
+    root: WARN
+    com.neuralops: INFO
+    org.springframework.kafka: WARN
