@@ -41,7 +41,7 @@ spring:
         - id: cost-analytics-service
           uri: ${COST_ANALYTICS_URI:http://localhost:8084}
           predicates:
-            - Path=/api/v1/costs/**
+            - Path=/api/v1/cost/**
 
         - id: user-service
           uri: ${USER_SERVICE_URI:http://localhost:8085}

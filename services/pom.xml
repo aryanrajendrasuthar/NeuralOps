@@ -134,10 +134,7 @@
                                 <version>${mapstruct.version}</version>
                             </path>
                         </annotationProcessorPaths>
-                        <compilerArgs>
-                            <arg>--enable-preview</arg>
-                        </compilerArgs>
-                    </configuration>
+                        </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.flywaydb</groupId>
