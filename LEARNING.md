@@ -6,6 +6,206 @@ encountered that sprint. The intended reader is a developer who understands basi
 yet worked in an industry engineering role. These are the things you would learn working alongside a senior
 engineer — explained directly rather than buried in documentation or assumed as prior knowledge.
 
+Sprint 3 — Metrics Engine and Real-Time Analytics
+---------------------------------------------------
+
+What Latency Percentiles Actually Mean
+
+When someone says "our average latency is 120ms," they are giving you almost no useful information. The
+average is dominated by the common case and completely hides the worst case. If 95% of requests take 100ms
+and 5% take 3000ms, the average is around 245ms — a number that accurately describes no actual request.
+
+Latency percentiles tell you what fraction of requests are slower than a given threshold. The p50 (median)
+is the midpoint — half of all requests are faster, half are slower. The p95 is the latency value that 95% of
+requests complete within. The p99 is the value that 99% of requests complete within.
+
+Why do engineers focus on p95 and p99 rather than the average? Because the tail latency is what users
+actually experience when things go wrong. A payment system might handle 10,000 requests per second.
+At p99 = 2 seconds, that means 100 requests per second are taking more than 2 seconds — likely causing
+timeouts, retries, and cascading failures. A mean of 120ms would completely mask this.
+
+SLAs (Service Level Agreements) are always written in percentile terms: "p99 latency must be under 500ms
+for 99.9% of production traffic." This is the language you will encounter in every production engineering
+role. When a team says "we have a latency problem," they mean their p95 or p99 has blown past their SLA
+threshold, not that the average increased slightly.
+
+NeuralOps computes latency percentiles using Redis sorted sets. Each trace event is inserted with a score
+equal to its latency in milliseconds. The p50, p95, and p99 are retrieved by rank — the element at rank
+(count * 0.50) is the p50, and so on. This is O(log n) per percentile read and O(log n) per write, which
+is why Redis sorted sets are the canonical choice for real-time latency percentile tracking. Computing
+percentiles by scanning all rows in PostgreSQL would be correct but far too slow for a live dashboard.
+
+How Redis Data Structures Work
+
+Redis is not just a cache. It is a data structure server. The choice of data structure is critical to
+correctness and performance:
+
+A Hash (`HSET`, `HGET`, `HINCRBY`) is a flat map of string fields to string values within a single key.
+NeuralOps uses it to store per-agent scalar accumulators: `agent:stats:{agentId}` holds `trace_count`,
+`token_count`, `error_count`, and `cost_usd_total`. The `HINCRBY` command atomically increments an integer
+field — no read-modify-write cycle, no race condition, no lost updates. This is the correct pattern for
+counters that multiple consumers might write concurrently.
+
+A Sorted Set (`ZADD`, `ZRANGE`, `ZRANK`, `ZCARD`) stores unique members each with an associated floating-
+point score. Members are ordered by score ascending. NeuralOps uses sorted sets to maintain the sliding
+window of latency values, where the score is the latency in milliseconds. Rank-based retrieval of the p50,
+p95, and p99 is a single `ZRANGE` call with a computed rank index.
+
+A String (`SET`, `GET`) is the simplest type — a single value per key. NeuralOps uses it for the
+`agent:lastseen:{agentId}` key, which stores the timestamp of the most recent trace event. It is set with
+`SET key value` in a pipeline with no expiry, relying on the global 24-hour TTL applied after pipeline
+execution.
+
+All four write operations in `recordTraceEvent()` are executed in a single pipeline — the client batches
+all commands and sends them in one TCP round trip. Without pipelining, four separate Redis commands would
+require four round trips. At 1,000 traces per second, that is the difference between 4ms of Redis latency
+overhead and 0.5ms.
+
+What is a Circuit Breaker
+
+A circuit breaker is a safety mechanism that stops calling a downstream service when that service is
+failing, and gives it time to recover before retrying. The name comes from electrical circuit breakers,
+which interrupt current when a circuit is overloaded.
+
+Without a circuit breaker, if Redis goes down, every incoming trace event will attempt a Redis write, wait
+for the timeout (often 5-10 seconds), log an error, and fail. At 1,000 requests per second, this creates
+a backlog of thousands of blocked threads before the first timeout even completes. The thread pool
+exhausts. The service stops accepting new requests. The ingestion pipeline backs up. A Redis outage becomes
+a full system outage.
+
+With a circuit breaker (we use Resilience4j), the breaker monitors recent failures. After 50% of the last
+10 calls fail, the breaker opens. Subsequent calls immediately throw an exception without attempting the
+network call. This is called failing fast. After a wait period (15 seconds for Redis, 30 seconds for
+TimescaleDB in NeuralOps), the breaker enters a half-open state and allows a single test call. If it
+succeeds, the breaker closes and normal operation resumes. If it fails, the breaker re-opens.
+
+The important engineering insight: a circuit breaker does not fix the downstream failure. It limits the
+blast radius. It prevents one failing dependency from taking down the entire service. Callers that get
+"circuit breaker open" errors should handle them gracefully — in NeuralOps, the metrics-service logs the
+error and still acknowledges the Kafka offset, accepting a brief gap in real-time metrics rather than
+blocking event processing.
+
+What is HikariCP and Why Connection Pool Sizing Matters
+
+Every time a Java service queries PostgreSQL, it needs a database connection. Opening a new TCP connection
+and completing the PostgreSQL authentication handshake takes 50-100ms. For a service handling hundreds of
+requests per second, creating a new connection per request would immediately saturate both the Java process
+and the PostgreSQL server.
+
+A connection pool maintains a set of pre-opened connections and hands them out to callers. HikariCP is the
+fastest connection pool available for Java — it is the default in Spring Boot. When a request needs a
+database connection, it borrows one from the pool. When it is done, it returns the connection, and the
+next request can reuse it without the overhead of connection setup.
+
+The `maximum-pool-size` setting (20 in NeuralOps) controls the maximum number of simultaneous database
+connections per JVM. This is one of the most consequential configuration values in any production service.
+Too low: requests queue waiting for a connection when all 20 are in use, adding latency. Too high:
+PostgreSQL's per-connection overhead (roughly 5-10MB of RAM per connection plus locking overhead) causes
+the database to thrash under load.
+
+The correct maximum pool size is not "as high as possible." It is the smallest number that keeps the
+connection wait queue empty under peak load. For most OLTP workloads, 10-20 connections per service
+instance is correct. With three service instances, that is 30-60 PostgreSQL connections total — a number
+any PostgreSQL instance can handle comfortably.
+
+What Exactly-Once Kafka Semantics Means
+
+Kafka offers three delivery guarantees: at-most-once (messages may be lost), at-least-once (messages may
+be delivered more than once), and exactly-once (each message is processed exactly once).
+
+In practice, exactly-once end-to-end is achieved by combining two things: idempotent producers (so the
+same message is never published twice, even if retried) and transactional consumers with MANUAL_IMMEDIATE
+acknowledgment (so the offset is only committed after successful processing).
+
+NeuralOps uses MANUAL_IMMEDIATE acknowledgment in all Kafka consumers. The offset is committed only after
+the database write succeeds. If the service crashes between receiving the message and committing the
+offset, the message will be redelivered when the service restarts. This is at-least-once delivery —
+messages can be processed more than once.
+
+To handle redelivery safely, NeuralOps uses idempotent database operations. The cost-analytics-service
+uses `INSERT ... ON CONFLICT DO UPDATE` (an upsert) rather than a plain `INSERT`. If the same event is
+processed twice, the upsert either creates the row the first time or updates the accumulator atomically
+the second time, producing the same result either way. This is idempotent processing.
+
+True exactly-once requires the consumer to atomically commit the database write and the Kafka offset in
+the same transaction, which requires Kafka's transactional API and is significantly more complex. For
+NeuralOps, at-least-once delivery with idempotent writes is the correct engineering trade-off: simpler,
+faster, and sufficient for an observability use case where a double-counted metric is far less harmful
+than a missed metric.
+
+What is Linear Regression and How It Applies to Cost Forecasting
+
+Linear regression is a statistical method that fits a straight line through a set of data points,
+minimizing the sum of squared distances from each point to the line. The result is a line defined by a
+slope (how much y changes per unit of x) and an intercept (the value of y when x is zero). Once you have
+this line, you can predict y for any future x.
+
+For cost forecasting in NeuralOps, the x-axis is the day index (0, 1, 2, ... 29 for the last 30 days)
+and the y-axis is the cost in USD on that day. If an agent's costs are growing linearly — say, $0.10 per
+day last week and $0.15 per day this week — the regression line will have a positive slope and will
+correctly predict that costs will continue rising. If costs are flat, the slope will be near zero.
+
+The R-squared value (R²) measures how well the line fits the data. An R² of 1.0 means the data lies
+perfectly on the regression line — the model explains 100% of the variance. An R² of 0.0 means the data
+has no linear trend at all — the model is no better than predicting the average every day. In production,
+an R² below 0.5 is a signal that the linear model is a poor fit and the forecast should be interpreted
+cautiously.
+
+We use Apache Commons Math `SimpleRegression` for the computation. It accepts (x, y) data points,
+internally computes the least-squares line, and exposes `predict(x)` for future values and `getRSquare()`
+for model quality. The library handles all the numerical linear algebra — you do not need to implement the
+algorithm yourself.
+
+A critical production safeguard: any predicted negative cost is clamped to zero. Linear regression makes
+no assumptions about the physical meaning of its output. If costs were high two weeks ago and fell to
+zero last week, the regression line might predict negative costs next week. That is mathematically
+coherent but economically nonsensical. Always validate model outputs against physical constraints.
+
+What Flyway Migrations Are and Why They Matter in Production
+
+Flyway is a database schema migration tool. It maintains a table in your database (`flyway_schema_history`)
+that records every migration that has ever been applied, along with a checksum. When the application
+starts, Flyway compares the migrations on the classpath with the ones in the history table and applies
+any that have not been run yet.
+
+This gives you two critical guarantees. First, the schema is always in sync with the application code.
+If you deploy a new version of the service that expects a column that does not exist yet, Flyway adds the
+column during startup before the application begins serving traffic. Second, every schema change is
+version-controlled. The migration history is part of the git history, so you can trace exactly when any
+schema change was made and why.
+
+The `baseline-on-migrate: true` setting tells Flyway to treat an existing database as baseline v0 if the
+history table does not exist. This is how you adopt Flyway on an existing database without running all
+migrations from scratch.
+
+The most important production rule for Flyway migrations: once a migration has been applied to any
+production database, it is immutable. You cannot edit V1__create_tables.sql after it has run — Flyway
+stores the checksum and will fail to start if it detects a change. If you need to alter the schema,
+you write a new migration file (V2__add_column.sql). This constraint is actually a safety feature: it
+prevents you from silently changing a migration that has already run in one environment but not another.
+
+What 99.9% Uptime Actually Means
+
+99.9% uptime ("three nines") means the service is allowed to be unavailable for 8.76 hours per year, or
+43.8 minutes per month. 99.99% ("four nines") is 52.6 minutes per year. These numbers sound large but
+they include planned maintenance windows, deployments, and unexpected failures.
+
+Every engineering team at a production company has an SLA. The SLA is a commitment to users and
+stakeholders. Breaching it triggers an incident review. At larger companies, breaching it repeatedly may
+trigger financial penalties in customer contracts or trigger automatic escalation to on-call engineering
+managers.
+
+The path to high uptime is not writing perfect code — it is designing the system so that individual
+component failures do not cause full outages. The circuit breakers on Redis and PostgreSQL mean a Redis
+outage degrades NeuralOps (metrics are not computed in real-time) rather than taking it down entirely.
+The Kafka consumer's MANUAL_IMMEDIATE acknowledgment means a transient database error causes a delay in
+processing but no data loss. The event-driven architecture means the ingestion service can continue
+accepting events even while the metrics service is offline, because the events are buffered in Kafka.
+
+This design philosophy — preferring degraded operation over full failure — is what distinguishes production
+systems from prototype systems. You do not need to solve every failure mode. You need to ensure that the
+most likely failure modes produce graceful degradation rather than total outage.
+
 Sprint 2 — Core Trace Ingestion Pipeline
 -----------------------------------------
 

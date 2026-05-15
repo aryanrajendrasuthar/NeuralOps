@@ -2,6 +2,7 @@ package com.neuralops.metrics.kafka;
 
 import com.neuralops.metrics.domain.entity.AgentMetricEntity;
 import com.neuralops.metrics.domain.repository.AgentMetricRepository;
+import com.neuralops.metrics.redis.RedisMetricsStore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -13,23 +14,24 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.UUID;
 
 @Slf4j
 @Component
 public class TraceEventConsumer {
 
     private final AgentMetricRepository agentMetricRepository;
+    private final RedisMetricsStore redisMetricsStore;
     private final Counter tracesProcessedCounter;
     private final Counter tracesFailedCounter;
 
-    private final List<AgentMetricEntity> pendingFlush = new CopyOnWriteArrayList<>();
-
-    public TraceEventConsumer(AgentMetricRepository agentMetricRepository, MeterRegistry meterRegistry) {
+    public TraceEventConsumer(
+            AgentMetricRepository agentMetricRepository,
+            RedisMetricsStore redisMetricsStore,
+            MeterRegistry meterRegistry) {
         this.agentMetricRepository = agentMetricRepository;
+        this.redisMetricsStore = redisMetricsStore;
         this.tracesProcessedCounter = Counter.builder("neuralops.metrics.traces.processed")
                 .description("Total trace events processed by the metrics consumer")
                 .register(meterRegistry);
@@ -46,17 +48,33 @@ public class TraceEventConsumer {
     @Transactional
     public void consume(ConsumerRecord<String, Map<String, Object>> record, Acknowledgment acknowledgment) {
         try {
-            Map<String, Object> payload = record.value();
-            AgentMetricEntity metric = mapToMetricEntity(payload);
+            Map<String, Object> event = record.value();
+            AgentMetricEntity metric = mapToMetricEntity(event);
+
             agentMetricRepository.save(metric);
 
+            String traceId = extractString(event, "traceId", UUID.randomUUID().toString());
+            Number tokenCount = (Number) event.get("tokenCount");
+            Number costUsd = (Number) event.get("estimatedCostUsd");
+            BigDecimal cost = costUsd != null ? BigDecimal.valueOf(costUsd.doubleValue()) : null;
+
+            redisMetricsStore.recordTraceEvent(
+                    metric.getAgentId(),
+                    traceId,
+                    metric.getLatencyMs(),
+                    tokenCount != null ? tokenCount.intValue() : null,
+                    cost,
+                    metric.getIsError()
+            );
+            redisMetricsStore.markAgentActive(metric.getAgentId());
+
             tracesProcessedCounter.increment();
-            log.debug("Processed trace event from partition={} offset={} agentId={}",
+            log.debug("Processed trace event partition={} offset={} agentId={}",
                     record.partition(), record.offset(), metric.getAgentId());
 
             acknowledgment.acknowledge();
         } catch (Exception ex) {
-            log.error("Failed to process trace event from partition={} offset={}: {}",
+            log.error("Failed to process trace event partition={} offset={}: {}",
                     record.partition(), record.offset(), ex.getMessage(), ex);
             tracesFailedCounter.increment();
             acknowledgment.acknowledge();
@@ -64,7 +82,7 @@ public class TraceEventConsumer {
     }
 
     private AgentMetricEntity mapToMetricEntity(Map<String, Object> event) {
-        String agentId = (String) event.get("agentId");
+        String agentId = extractString(event, "agentId", "unknown");
         String traceType = event.get("traceType") != null ? event.get("traceType").toString() : "UNKNOWN";
         Number latencyMs = (Number) event.get("latencyMs");
         Number tokenCount = (Number) event.get("tokenCount");
@@ -82,5 +100,10 @@ public class TraceEventConsumer {
                 .costUsd(costUsd != null ? BigDecimal.valueOf(costUsd.doubleValue()) : null)
                 .isError("ERROR".equals(traceType))
                 .build();
+    }
+
+    private String extractString(Map<String, Object> event, String key, String defaultValue) {
+        Object value = event.get(key);
+        return value != null ? value.toString() : defaultValue;
     }
 }
