@@ -107,4 +107,4 @@ def get_agent_history(agent_id: str, limit: int = 50, since=None) -> list:
     history = _agent_anomaly_history.get(agent_id, [])
     if since:
         history = [h for h in history if h["detected_at"] >= since]
-    return list(reversed(history))[-limit:]
+    return list(reversed(history))[:limit]

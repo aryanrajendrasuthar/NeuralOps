@@ -35,6 +35,7 @@ public class RedisMetricsStore {
     private static final String LATENCY_SORTED_KEY_PREFIX = "agent:latency:sorted:";
     private static final String LAST_SEEN_KEY_PREFIX = "agent:lastseen:";
     private static final String OVERVIEW_KEY = "metrics:overview";
+    private static final String ACTIVE_AGENTS_SET_KEY = "metrics:active-agents";
     private static final long LATENCY_WINDOW_MAX_SIZE = 10_000;
 
     private final RedisTemplate<String, Object> redisTemplate;
@@ -141,11 +142,14 @@ public class RedisMetricsStore {
         Map<Object, Object> raw = redisTemplate.opsForHash().entries(OVERVIEW_KEY);
         Map<String, Object> overview = new HashMap<>();
         raw.forEach((k, v) -> overview.put(k.toString(), v));
+        Long activeAgents = redisTemplate.opsForSet().size(ACTIVE_AGENTS_SET_KEY);
+        overview.put("active_agents", activeAgents != null ? activeAgents : 0L);
         return overview;
     }
 
     public void markAgentActive(String agentId) {
-        redisTemplate.opsForHash().increment(OVERVIEW_KEY, "active_agents", 1);
+        redisTemplate.opsForSet().add(ACTIVE_AGENTS_SET_KEY, agentId);
+        redisTemplate.expire(ACTIVE_AGENTS_SET_KEY, Duration.ofSeconds(redisTtlSeconds));
         redisTemplate.expire(STATS_KEY_PREFIX + agentId, Duration.ofSeconds(redisTtlSeconds));
         redisTemplate.expire(LATENCY_SORTED_KEY_PREFIX + agentId, Duration.ofSeconds(redisTtlSeconds));
     }
