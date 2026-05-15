@@ -80,24 +80,8 @@ def _score_event(agent_id: str, buffer: list, feature_vector: list) -> float:
 
 
 async def _publish_anomaly(event: dict) -> None:
-    try:
-        import json
-        from aiokafka import AIOKafkaProducer
-
-        bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-        topic = os.getenv("KAFKA_TOPIC_ANOMALIES", "neuralops.anomalies")
-
-        producer = AIOKafkaProducer(
-            bootstrap_servers=bootstrap_servers,
-            value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
-        )
-        await producer.start()
-        try:
-            await producer.send_and_wait(topic, key=event["agent_id"].encode(), value=event)
-        finally:
-            await producer.stop()
-    except Exception:
-        logger.exception("Failed to publish anomaly event for agent %s", event.get("agent_id"))
+    from app.kafka.producer import publish_anomaly
+    await publish_anomaly(event["agent_id"], event)
 
 
 def get_agent_status(agent_id: str) -> Optional[dict]:

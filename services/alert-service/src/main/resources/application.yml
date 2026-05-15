@@ -55,6 +55,7 @@ neuralops:
     deduplication-window-seconds: ${ALERT_DEDUP_WINDOW_SECONDS:300}
     webhook-timeout-seconds: ${WEBHOOK_TIMEOUT_SECONDS:10}
     webhook-max-retries: ${WEBHOOK_MAX_RETRIES:3}
+    retry-interval-ms: ${WEBHOOK_RETRY_INTERVAL_MS:60000}
     thresholds:
       latency-ms: ${ALERT_LATENCY_THRESHOLD_MS:2000}
       error-rate-percent: ${ALERT_ERROR_RATE_THRESHOLD:5.0}
