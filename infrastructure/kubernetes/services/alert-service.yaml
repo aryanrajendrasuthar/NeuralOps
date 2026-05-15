@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-service
+  namespace: neuralops
+  labels:
+    app: alert-service
+    app.kubernetes.io/part-of: neuralops
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: alert-service
+  template:
+    metadata:
+      labels:
+        app: alert-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8083"
+    spec:
+      containers:
+        - name: alert-service
+          image: neuralops/alert-service:latest
+          ports:
+            - containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: neuralops-config
+            - secretRef:
+                name: neuralops-secrets
+          env:
+            - name: SERVER_PORT
+              value: "8083"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "384Mi"
+            limits:
+              cpu: "1"
+              memory: "768Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 25
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 45
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-service
+  namespace: neuralops
+spec:
+  selector:
+    app: alert-service
+  ports:
+    - port: 8083
+      targetPort: 8083
+  type: ClusterIP

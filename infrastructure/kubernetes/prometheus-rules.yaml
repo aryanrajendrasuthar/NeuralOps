@@ -1,0 +1,111 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: neuralops-alerts
+  namespace: neuralops
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: neuralops.ingestion
+      interval: 30s
+      rules:
+        - alert: TraceIngestionHighErrorRate
+          expr: |
+            sum(rate(neuralops_traces_rejected_total[5m]))
+            /
+            (sum(rate(neuralops_traces_accepted_total[5m])) + sum(rate(neuralops_traces_rejected_total[5m])))
+            > 0.05
+          for: 2m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Trace ingestion error rate above 5%"
+            description: "{{ $value | humanizePercentage }} of trace events are being rejected."
+
+        - alert: TraceIngestionDown
+          expr: absent(up{job="neuralops-trace-ingestion"} == 1)
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Trace ingestion service is unreachable"
+            description: "No trace-ingestion-service instances are reporting healthy to Prometheus."
+
+    - name: neuralops.latency
+      interval: 30s
+      rules:
+        - alert: GatewayHighP99Latency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_server_requests_seconds_bucket{service="gateway"}[5m])) by (le)
+            ) > 1.0
+          for: 3m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Gateway p99 latency exceeds 1s"
+            description: "p99 latency is {{ $value | humanizeDuration }}. SLA threshold is 500ms."
+
+    - name: neuralops.kafka
+      interval: 60s
+      rules:
+        - alert: KafkaConsumerLagHigh
+          expr: |
+            sum(kafka_consumer_fetch_manager_records_lag) by (client_id) > 10000
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Kafka consumer lag is high"
+            description: "Consumer {{ $labels.client_id }} has {{ $value }} messages of unprocessed lag."
+
+        - alert: KafkaConsumerLagCritical
+          expr: |
+            sum(kafka_consumer_fetch_manager_records_lag) by (client_id) > 50000
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Kafka consumer lag is critically high"
+            description: "Consumer {{ $labels.client_id }} lag is {{ $value }}. Investigate immediately."
+
+    - name: neuralops.redis
+      interval: 30s
+      rules:
+        - alert: RedisWriteErrorRate
+          expr: |
+            sum(rate(neuralops_redis_errors_total[5m]))
+            /
+            sum(rate(neuralops_redis_writes_total[5m]))
+            > 0.01
+          for: 2m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Redis write error rate above 1%"
+            description: "{{ $value | humanizePercentage }} of Redis writes are failing. Real-time metrics may be stale."
+
+    - name: neuralops.jvm
+      interval: 60s
+      rules:
+        - alert: JVMHeapUsageHigh
+          expr: |
+            jvm_memory_used_bytes{area="heap"}
+            /
+            jvm_memory_max_bytes{area="heap"}
+            > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "JVM heap usage above 85%"
+            description: "Service {{ $labels.service }} heap is at {{ $value | humanizePercentage }}. GC pressure may cause latency spikes."

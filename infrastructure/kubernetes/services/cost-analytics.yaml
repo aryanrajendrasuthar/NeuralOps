@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cost-analytics-service
+  namespace: neuralops
+  labels:
+    app: cost-analytics-service
+    app.kubernetes.io/part-of: neuralops
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cost-analytics-service
+  template:
+    metadata:
+      labels:
+        app: cost-analytics-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8084"
+    spec:
+      containers:
+        - name: cost-analytics-service
+          image: neuralops/cost-analytics-service:latest
+          ports:
+            - containerPort: 8084
+          envFrom:
+            - configMapRef:
+                name: neuralops-config
+            - secretRef:
+                name: neuralops-secrets
+          env:
+            - name: SERVER_PORT
+              value: "8084"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "384Mi"
+            limits:
+              cpu: "1"
+              memory: "768Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8084
+            initialDelaySeconds: 25
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8084
+            initialDelaySeconds: 45
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cost-analytics-service
+  namespace: neuralops
+spec:
+  selector:
+    app: cost-analytics-service
+  ports:
+    - port: 8084
+      targetPort: 8084
+  type: ClusterIP

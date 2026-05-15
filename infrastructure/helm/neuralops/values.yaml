@@ -1,0 +1,139 @@
+global:
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+  namespace: neuralops
+
+image:
+  tag: latest
+
+kafka:
+  bootstrapServers: "kafka:9092"
+  topics:
+    tracesRaw: "neuralops.traces.raw"
+    anomalies: "neuralops.anomalies"
+
+redis:
+  host: "redis"
+  port: "6379"
+  password: ""
+
+postgres:
+  url: "jdbc:postgresql://postgres:5432/neuralops"
+  user: "neuralops"
+  password: "change_me_in_production"
+
+timescale:
+  url: "jdbc:postgresql://timescaledb:5432/neuralops_metrics"
+  user: "neuralops"
+  password: "change_me_in_production"
+
+jwt:
+  secret: "change-this-to-a-secure-256-bit-secret-in-production"
+  accessTokenExpiryMinutes: 15
+  refreshTokenExpiryDays: 30
+
+ollama:
+  baseUrl: "http://ollama:11434"
+
+services:
+  gateway:
+    replicaCount: 2
+    port: 8080
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "384Mi"
+      limits:
+        cpu: "1"
+        memory: "768Mi"
+    autoscaling:
+      enabled: false
+
+  traceIngestion:
+    replicaCount: 3
+    port: 8081
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2"
+        memory: "1Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+
+  metricsService:
+    replicaCount: 3
+    port: 8082
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2"
+        memory: "1Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 8
+      targetCPUUtilizationPercentage: 70
+
+  alertService:
+    replicaCount: 2
+    port: 8083
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "384Mi"
+      limits:
+        cpu: "1"
+        memory: "768Mi"
+    autoscaling:
+      enabled: false
+
+  costAnalytics:
+    replicaCount: 2
+    port: 8084
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "384Mi"
+      limits:
+        cpu: "1"
+        memory: "768Mi"
+    autoscaling:
+      enabled: false
+
+  userService:
+    replicaCount: 2
+    port: 8085
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "384Mi"
+      limits:
+        cpu: "1"
+        memory: "768Mi"
+    autoscaling:
+      enabled: false
+
+  aiAnalysis:
+    replicaCount: 2
+    port: 8090
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "2Gi"
+    autoscaling:
+      enabled: false
+
+ingress:
+  enabled: true
+  className: nginx
+  host: neuralops.example.com

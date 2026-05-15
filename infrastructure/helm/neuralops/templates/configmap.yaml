@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neuralops-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "neuralops.labels" . | nindent 4 }}
+data:
+  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.kafka.bootstrapServers | quote }}
+  KAFKA_TOPIC_TRACES_RAW: {{ .Values.kafka.topics.tracesRaw | quote }}
+  KAFKA_TOPIC_ANOMALIES: {{ .Values.kafka.topics.anomalies | quote }}
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  POSTGRES_URL: {{ .Values.postgres.url | quote }}
+  TIMESCALE_URL: {{ .Values.timescale.url | quote }}
+  OLLAMA_BASE_URL: {{ .Values.ollama.baseUrl | quote }}
+  LOG_LEVEL: "INFO"
+  APP_LOG_LEVEL: "INFO"
+  KAFKA_LISTENER_CONCURRENCY: "3"
+  DB_POOL_MAX: "20"
+  DB_POOL_MIN: "5"
+  TRACE_INGESTION_URI: "http://trace-ingestion-service:{{ .Values.services.traceIngestion.port }}"
+  METRICS_SERVICE_URI: "http://metrics-service:{{ .Values.services.metricsService.port }}"
+  ALERT_SERVICE_URI: "http://alert-service:{{ .Values.services.alertService.port }}"
+  COST_ANALYTICS_URI: "http://cost-analytics-service:{{ .Values.services.costAnalytics.port }}"
+  USER_SERVICE_URI: "http://user-service:{{ .Values.services.userService.port }}"
+  AI_ANALYSIS_URI: "http://ai-analysis-service:{{ .Values.services.aiAnalysis.port }}"
+  JWT_ACCESS_EXPIRY_MINUTES: {{ .Values.jwt.accessTokenExpiryMinutes | quote }}
+  JWT_REFRESH_EXPIRY_DAYS: {{ .Values.jwt.refreshTokenExpiryDays | quote }}

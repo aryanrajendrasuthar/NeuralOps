@@ -6,6 +6,184 @@ encountered that sprint. The intended reader is a developer who understands basi
 yet worked in an industry engineering role. These are the things you would learn working alongside a senior
 engineer — explained directly rather than buried in documentation or assumed as prior knowledge.
 
+Sprint 6 — Kubernetes, Observability, and Production Readiness
+---------------------------------------------------------------
+
+What Kubernetes Actually Is and Why It Exists
+
+Docker lets you package an application as a container. Running one container on one machine is
+straightforward. The problem appears when you need to run fifty containers across ten machines,
+route traffic between them, restart them when they crash, scale them up under load, and deploy
+new versions without downtime. Doing this manually is a full-time job. Kubernetes automates it.
+
+Kubernetes is a container orchestration system. You describe the desired state of your system
+in YAML manifests — "I want 3 replicas of trace-ingestion-service, each with 2 CPUs and 1GB
+of memory, reachable at port 8081" — and Kubernetes continuously works to make reality match
+that description. If a pod crashes, Kubernetes restarts it. If a node fails, Kubernetes
+reschedules those pods on other nodes. If you update the image tag, Kubernetes performs a
+rolling update, replacing pods one at a time to ensure zero downtime.
+
+The core primitives:
+
+A Pod is the smallest deployable unit — one or more containers that share a network namespace
+and can communicate via localhost. In NeuralOps, each service is one container per pod.
+
+A Deployment manages a set of identical pods. It specifies the replica count, the container
+image, resource limits, and health checks. When you change the image tag and apply the manifest,
+the Deployment controller performs a rolling update automatically.
+
+A Service is a stable network endpoint that load-balances traffic across the pods of a Deployment.
+Services have a DNS name within the cluster — `metrics-service` resolves to the ClusterIP of the
+metrics-service Service, which then routes to any healthy metrics-service pod. Services decouple
+callers from the specific IPs of pods (which change every time a pod is restarted).
+
+A ConfigMap holds non-secret configuration data as key-value pairs. An env var pointing to a
+ConfigMap key (`valueFrom.configMapKeyRef`) injects that value into the container at runtime
+without hardcoding it in the image.
+
+A Secret holds sensitive data (passwords, tokens) base64-encoded. They are kept out of
+ConfigMaps and container images, and can be encrypted at rest by cloud providers. The YAML
+placeholder pattern in NeuralOps's 02-secrets.yaml is intentional — real secrets are
+managed by a secrets manager (HashiCorp Vault, AWS Secrets Manager) and injected at deploy
+time, never committed to version control.
+
+What a HorizontalPodAutoscaler Does
+
+A HorizontalPodAutoscaler (HPA) automatically adjusts the number of pod replicas based on
+observed metrics. The NeuralOps HPA on trace-ingestion-service scales between 3 and 10
+replicas when CPU utilization exceeds 70%. This is not instantaneous — the HPA polls metrics
+from the Kubernetes Metrics Server every 15 seconds and applies a stabilization window of
+3 minutes by default to prevent thrashing (scaling up and down rapidly during a traffic spike).
+
+The practical consequence: if you receive a sudden spike that saturates all 3 replicas, you
+will experience elevated latency for 2-5 minutes before the new replicas are scheduled,
+running, and passing their readiness probes. This is called the cold start delay. Mitigation
+strategies include setting the minimum replica count high enough to absorb expected peaks,
+and pre-scaling before known high-traffic events.
+
+What Helm Is and Why It Exists
+
+Kubernetes manifests are YAML. They are exact — you specify every field for every resource.
+When you have seven services plus their Services, HPAs, ConfigMaps, and Secrets, you have
+dozens of files with a lot of repeated structure. Changing the namespace requires editing
+every file. Changing the image tag for a release requires editing seven Deployment files.
+
+Helm is a package manager for Kubernetes that introduces parameterized templates. A Helm
+chart is a collection of templates plus a `values.yaml` file containing default values.
+The templates use Go templating syntax (double braces) to insert values at render time.
+`helm install neuralops ./infrastructure/helm/neuralops --set image.tag=v1.2.3` renders
+all templates with the specified values and applies them to the cluster. `helm upgrade`
+applies changes to an existing installation. `helm rollback` reverts to the previous release.
+
+The key discipline with Helm: values.yaml is the contract between the chart author and the
+chart user. Everything a user might need to customize should be a value. Everything that
+should never change should be hardcoded in the template. The `_helpers.tpl` file defines
+reusable template fragments — the NeuralOps `neuralops.labels` helper ensures every resource
+gets the same set of standard Kubernetes labels, which is required for `kubectl get` queries
+and for integration with monitoring tools that label-select resources.
+
+How Prometheus Collects Metrics
+
+Prometheus is a pull-based monitoring system. Rather than services pushing metrics to a
+central collector, Prometheus scrapes an HTTP endpoint on each service at a configurable
+interval. The Spring Boot Actuator exposes this endpoint at `/actuator/prometheus`. The
+FastAPI ai-analysis-service exposes it at `/metrics` using the prometheus-client library.
+
+Each scrape returns all registered metrics in the Prometheus exposition format: one metric
+per line, with its value and any label key-value pairs that annotate it. Prometheus stores
+these time-series values in its local TSDB (time-series database). The data is indexed by
+metric name and labels. A query like `sum(rate(http_server_requests_seconds_count[5m]))
+by (service)` computes the per-service request rate over the last 5 minutes.
+
+PromQL (Prometheus Query Language) is the query language. The functions you need to know:
+
+`rate(metric[window])` — the per-second rate of change of a counter over the window. Use
+this for anything that only goes up (request count, error count).
+
+`histogram_quantile(phi, rate(metric_bucket[window]))` — computes a percentile from a
+histogram metric. Spring Boot Actuator automatically tracks request durations as histograms.
+This is how you get p95 and p99 latency in Prometheus.
+
+`absent(metric)` — returns 1 if the metric has no samples in the last scrape interval.
+Used in the `TraceIngestionDown` alert to detect when a service disappears entirely.
+
+What Grafana Does That Prometheus Cannot
+
+Prometheus stores and queries metrics. Grafana visualizes them. Grafana connects to
+Prometheus as a data source, then renders the query results as dashboards with panels
+(line charts, bar charts, stat panels, tables, gauges). Multiple data sources can be
+combined in a single dashboard — you can put Prometheus metrics and PostgreSQL query
+results side by side.
+
+The NeuralOps dashboard is provisioned automatically via the `dashboard-provider.yml`
+file and the dashboard JSON. This means the dashboard exists from the first time
+Grafana starts — engineers do not need to manually import it. Provisioned dashboards
+can still be edited in the UI, but changes are reset if Grafana restarts unless the
+JSON file is updated.
+
+What Prometheus Alert Rules Are and How They Route to Engineers
+
+A PrometheusRule (in a Kubernetes cluster using the Prometheus Operator) defines
+alerting expressions alongside the metrics. When an expression evaluates to true for
+longer than the `for` duration, Prometheus fires the alert to Alertmanager.
+Alertmanager routes alerts to notification channels — Slack, PagerDuty, email —
+based on label matchers. In NeuralOps, alerts are labeled with `team: platform`,
+which Alertmanager uses to route to the platform engineering on-call rotation.
+
+The `for` duration prevents flapping alerts. `GatewayHighP99Latency` fires only after
+3 consecutive minutes of elevated latency. A brief spike — a single GC pause, a slow
+database query — does not page anyone. This is intentional. Alert fatigue (too many
+alerts) causes engineers to ignore alerts, which causes real incidents to be missed.
+Tuning the `for` duration and the threshold is ongoing operational work.
+
+What Load Testing Reveals That Unit Tests Cannot
+
+Unit tests verify that code is correct given specific inputs. Load tests verify that
+the system as a whole behaves correctly under the volume and concurrency of production
+traffic. They reveal problems that only appear at scale:
+
+Thread pool exhaustion: at low concurrency, every request gets a thread immediately.
+At 500 concurrent users, requests queue waiting for a free thread. Spring Boot's
+virtual threads (enabled for all NeuralOps services) eliminate this problem for most
+workloads, but database connection pool exhaustion is still possible.
+
+Lock contention in PostgreSQL: a single-row upsert for a session record is fast in
+isolation. Under 500 concurrent requests for the same session ID, the database
+acquires row-level locks and queues conflicting transactions. Load tests reveal this
+as dramatically higher p99 latency than p95.
+
+GC pressure: a JVM running at 2GB heap is fine at 100 req/s. At 1,000 req/s, the
+rate of object allocation increases proportionally. Minor GC pauses become more
+frequent. If the heap is not large enough, the JVM triggers major GC (stop-the-world),
+causing multi-second pauses visible as sharp p99 latency spikes in the load test.
+
+k6 is the industry standard tool for this kind of test. The `stages` configuration
+ramps traffic up and down, simulating the traffic pattern of a real production day.
+The `thresholds` configuration makes the test fail CI if the targets are not met.
+The custom `handleSummary` function produces a readable output summarizing the result.
+
+What an Operational Runbook Is and Why It Matters
+
+A runbook is the written answer to "what do I do at 3am when this alert fires?" It
+contains: what the alert means, how to diagnose the root cause step by step, what
+the common causes are, and the commands to run to fix each one.
+
+Runbooks exist because even experienced engineers cannot reliably recall diagnostic
+steps when woken from sleep by a pager. They also transfer knowledge from the engineers
+who built a system to the engineers who are on-call for it. The engineer who built
+the HikariCP connection pool knows immediately what "HikariPool timeout" means. An
+on-call engineer who has never seen that log line does not.
+
+Good runbooks are updated after every incident. If you resolve a problem by running
+a command not in the runbook, you add it to the runbook before you go back to sleep.
+This is the most important discipline in SRE (Site Reliability Engineering): treating
+operational knowledge as a first-class artifact that lives alongside the code.
+
+The NeuralOps runbooks cover the two most likely production alerts: high gateway
+latency (usually a downstream bottleneck) and Kafka consumer lag (usually a database
+write slowdown or a crashing consumer). These two patterns cover the majority of
+production incidents in event-driven microservices systems.
+
 Sprint 5 — Authentication, Authorization, and the Frontend
 -----------------------------------------------------------
 

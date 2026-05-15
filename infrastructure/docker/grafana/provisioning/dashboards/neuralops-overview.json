@@ -1,0 +1,149 @@
+{
+  "title": "NeuralOps Platform Overview",
+  "uid": "neuralops-overview",
+  "tags": ["neuralops"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Trace Ingestion Rate (req/s)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(neuralops_traces_accepted_total[1m]))",
+          "legendFormat": "accepted/s"
+        },
+        {
+          "expr": "sum(rate(neuralops_traces_rejected_total[1m]))",
+          "legendFormat": "rejected/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Gateway p99 Latency (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service='gateway'}[1m])) by (le)) * 1000",
+          "legendFormat": "p99 ms"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service='gateway'}[1m])) by (le)) * 1000",
+          "legendFormat": "p95 ms"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Redis Write Operations/s",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(neuralops_redis_writes_total[1m]))",
+          "legendFormat": "writes/s"
+        },
+        {
+          "expr": "sum(rate(neuralops_redis_errors_total[1m]))",
+          "legendFormat": "errors/s"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Alerts Fired / Deduped",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 8, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(neuralops_alerts_fired_total[5m]))",
+          "legendFormat": "fired/5m"
+        },
+        {
+          "expr": "sum(rate(neuralops_alerts_deduped_total[5m]))",
+          "legendFormat": "deduped/5m"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "JVM Heap Used (MB)",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "jvm_memory_used_bytes{area='heap'} / 1048576",
+          "legendFormat": "{{service}} heap MB"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Kafka Consumer Lag",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 15, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(kafka_consumer_fetch_manager_records_lag) by (client_id)",
+          "legendFormat": "{{client_id}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Webhook Delivery Success Rate",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 15, "w": 6, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(neuralops_webhook_delivered_total[5m])) / (sum(rate(neuralops_webhook_delivered_total[5m])) + sum(rate(neuralops_webhook_failed_total[5m]))) * 100",
+          "legendFormat": "success %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 90 },
+              { "color": "green", "value": 99 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "HTTP Error Rate by Service",
+      "type": "timeseries",
+      "gridPos": { "x": 18, "y": 15, "w": 6, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{status=~'5..'}[1m])) by (service)",
+          "legendFormat": "{{service}} 5xx/s"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trace-ingestion-service
+  namespace: neuralops
+  labels:
+    app: trace-ingestion-service
+    app.kubernetes.io/part-of: neuralops
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: trace-ingestion-service
+  template:
+    metadata:
+      labels:
+        app: trace-ingestion-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8081"
+    spec:
+      containers:
+        - name: trace-ingestion-service
+          image: neuralops/trace-ingestion-service:latest
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: neuralops-config
+            - secretRef:
+                name: neuralops-secrets
+          env:
+            - name: SERVER_PORT
+              value: "8081"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 25
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trace-ingestion-service
+  namespace: neuralops
+spec:
+  selector:
+    app: trace-ingestion-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trace-ingestion-service-hpa
+  namespace: neuralops
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: trace-ingestion-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

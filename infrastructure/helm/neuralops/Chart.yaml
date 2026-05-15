@@ -1,0 +1,13 @@
+apiVersion: v2
+name: neuralops
+description: NeuralOps — AI Agent Observability and Reliability Platform
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - observability
+  - ai
+  - monitoring
+  - kafka
+maintainers:
+  - name: NeuralOps Engineering

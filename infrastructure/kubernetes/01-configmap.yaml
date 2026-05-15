@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neuralops-config
+  namespace: neuralops
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_TOPIC_TRACES_RAW: "neuralops.traces.raw"
+  KAFKA_TOPIC_ANOMALIES: "neuralops.anomalies"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  POSTGRES_URL: "jdbc:postgresql://postgres:5432/neuralops"
+  TIMESCALE_URL: "jdbc:postgresql://timescaledb:5432/neuralops_metrics"
+  OLLAMA_BASE_URL: "http://ollama:11434"
+  LOG_LEVEL: "INFO"
+  APP_LOG_LEVEL: "INFO"
+  KAFKA_LISTENER_CONCURRENCY: "3"
+  DB_POOL_MAX: "20"
+  DB_POOL_MIN: "5"
+  TRACE_INGESTION_URI: "http://trace-ingestion-service:8081"
+  METRICS_SERVICE_URI: "http://metrics-service:8082"
+  ALERT_SERVICE_URI: "http://alert-service:8083"
+  COST_ANALYTICS_URI: "http://cost-analytics-service:8084"
+  USER_SERVICE_URI: "http://user-service:8085"
+  AI_ANALYSIS_URI: "http://ai-analysis-service:8090"
