@@ -1,0 +1,100 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: neuralops-gateway
+  threads:
+    virtual:
+      enabled: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 2s
+      timeout: 2s
+  cloud:
+    gateway:
+      routes:
+        - id: trace-ingestion
+          uri: ${TRACE_INGESTION_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/traces/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                redis-rate-limiter.requestedTokens: 1
+
+        - id: metrics-service
+          uri: ${METRICS_SERVICE_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/metrics/**
+
+        - id: alert-service
+          uri: ${ALERT_SERVICE_URI:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/alerts/**
+
+        - id: cost-analytics-service
+          uri: ${COST_ANALYTICS_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/costs/**
+
+        - id: user-service
+          uri: ${USER_SERVICE_URI:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/auth/**, /api/v1/users/**, /api/v1/teams/**
+
+        - id: ai-analysis-service
+          uri: ${AI_ANALYSIS_URI:http://localhost:8090}
+          predicates:
+            - Path=/api/v1/anomalies/**
+
+      default-filters:
+        - AddResponseHeader=X-NeuralOps-Version, 1.0.0
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_UNIQUE
+
+      globalcors:
+        corsConfigurations:
+          "[/**]":
+            allowedOriginPatterns: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+            allowedMethods: GET, POST, PUT, DELETE, OPTIONS, PATCH
+            allowedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+
+eureka:
+  client:
+    enabled: ${EUREKA_ENABLED:false}
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      service: neuralops-gateway
+      version: 1.0.0
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+    com.neuralops: ${APP_LOG_LEVEL:DEBUG}
+    org.springframework.cloud.gateway: INFO

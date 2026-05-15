@@ -1,0 +1,79 @@
+server:
+  port: ${SERVER_PORT:8084}
+
+spring:
+  application:
+    name: neuralops-cost-analytics
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/neuralops}
+    username: ${POSTGRES_USER:neuralops}
+    password: ${POSTGRES_PASSWORD:neuralops_dev_password}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN:5}
+      pool-name: CostAnalyticsPool
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:neuralops-cost-analytics}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.neuralops.*
+        max.poll.records: 500
+    listener:
+      ack-mode: MANUAL_IMMEDIATE
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:3}
+
+neuralops:
+  kafka:
+    topics:
+      traces-raw: ${KAFKA_TOPIC_TRACES_RAW:neuralops.traces.raw}
+  cost:
+    forecast-days: ${COST_FORECAST_DAYS:7}
+    history-days-for-forecast: ${COST_HISTORY_DAYS:30}
+    usd-per-1k-tokens-default: ${COST_USD_PER_1K_TOKENS:0.002}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      service: neuralops-cost-analytics
+      version: 1.0.0
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+    com.neuralops: ${APP_LOG_LEVEL:DEBUG}
